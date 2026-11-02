@@ -19,6 +19,9 @@ const (
 
 	rfpMultiplier    = 150
 	rfpImpMultiplier = 50
+
+	fpBase       = 100
+	fpMultiplier = 50
 )
 
 func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha, beta int32) int32 {
@@ -164,8 +167,9 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 		}
 
 		// futility pruning
+		futilityMargin := fpBase + fpMultiplier*int32(depth)
 		if !isRoot && isQuiet && !inCheck && !isMated &&
-			depth < fpMaxDepth && staticEval+150 <= alpha {
+			depth < fpMaxDepth && staticEval+futilityMargin <= alpha {
 			movePicker.skipQuiets = true
 			continue
 		}
