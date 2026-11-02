@@ -54,7 +54,7 @@ func Loop(r io.Reader, w io.Writer) {
 			return
 
 		case "uci":
-			fmt.Fprintln(w, "id name Eunoia")
+			fmt.Fprintln(w, "id name Eunoia v1")
 			fmt.Fprintln(w, "id author Master Struct")
 			fmt.Fprintln(w, "option name Threads type spin default 1 min 1 max 1")
 			fmt.Fprintln(w, "option name Hash type spin default", tt.DefaultSizeMiB, "min 1 max 33554432")

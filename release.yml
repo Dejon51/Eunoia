@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PKG: ./cmd/eunoia
+  TAG: ${{ github.event.release.tag_name || github.ref_name }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build all binaries
+        run: |
+          set -euo pipefail
+          mkdir dist
+
+          build() {
+            local os=$1 arch=$2 level=$3 suffix ext="" label=$1
+            if [ "$arch" = amd64 ]; then suffix="${level}"; else suffix="arm64"; fi
+            [ "$os" = windows ] && ext=".exe"
+            [ "$os" = darwin ] && label="macos"
+            if [ "$os" = windows ]; then
+              local name="eunoia-${suffix}${ext}"
+            else
+              local name="eunoia-${label}-${suffix}${ext}"
+            fi
+            echo "building ${name}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" GOAMD64="$level" \
+              go build -trimpath -ldflags="-s -w" -o "dist/${name}" "$PKG"
+          }
+
+          for os in linux windows darwin; do
+            for level in v2 v3; do
+              build "$os" amd64 "$level"
+            done
+            build "$os" arm64 ""
+          done
+
+      - name: Bench check
+        run: |
+          set -euo pipefail
+
+          # expected: "bench: 1234567" line in the commit message of the built commit
+          want=$(git log -1 --format=%B | grep -iE '^bench[:[:space:]]+[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
+          if [ -z "$want" ]; then
+            echo "::error::no 'bench: N' line found in the latest commit message"
+            exit 1
+          fi
+
+          # actual: run the native-compatible binary, parse "Nodes searched: N"
+          out=$(./dist/eunoia-linux-v2 bench)
+          echo "$out"
+          got=$(echo "$out" | sed -n 's/^Nodes searched: //p')
+
+          echo "commit message bench: $want"
+          echo "binary bench:         $got"
+          if [ "$want" != "$got" ]; then
+            echo "::error::bench mismatch (commit says $want, binary says $got)"
+            exit 1
+          fi
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum eunoia-* > SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eunoia-binaries
+          path: dist/*
+
+      - name: Attach binaries to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber
