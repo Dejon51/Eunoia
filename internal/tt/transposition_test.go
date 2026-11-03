@@ -85,8 +85,8 @@ func TestStoreAndProbe(t *testing.T) {
 
 	tt.Store(key, move, 100, 5, Exact)
 
-	entry, hit := tt.Probe(key)
-	if !hit {
+	entry := tt.Probe(key)
+	if entry.Key != key {
 		t.Fatalf("expected hit for stored key")
 	}
 	if entry.Key != key || entry.Score != 100 || entry.Depth != 5 || entry.Flag != Exact {
@@ -96,8 +96,9 @@ func TestStoreAndProbe(t *testing.T) {
 
 func TestProbeMiss(t *testing.T) {
 	tt := NewTable(1)
-	_, hit := tt.Probe(999999)
-	if hit {
+	key := uint64(999999)
+	entry := tt.Probe(key)
+	if entry.Key == key {
 		t.Errorf("expected miss on empty table")
 	}
 }
@@ -110,7 +111,7 @@ func TestStoreOverwrites(t *testing.T) {
 	tt.Store(key, move, 10, 3, Upper)
 	tt.Store(key, move, 20, 6, Lower) // deeper depth - overwrite
 
-	entry, _ := tt.Probe(key)
+	entry := tt.Probe(key)
 	if entry.Score != 20 || entry.Depth != 6 || entry.Flag != Lower {
 		t.Errorf("expected deeper entry to overwrite, got score=%d depth=%d flag=%v", entry.Score, entry.Depth, entry.Flag)
 	}
@@ -124,7 +125,7 @@ func TestStoreKeeps(t *testing.T) {
 	tt.Store(key, move, 20, 6, Lower)
 	tt.Store(key, move, 10, 3, Upper) // shallower depth - don't overwrite
 
-	entry, _ := tt.Probe(key)
+	entry := tt.Probe(key)
 	if entry.Score != 20 || entry.Depth != 6 || entry.Flag != Lower {
 		t.Errorf("expected original deeper entry preserved, got score=%d depth=%d flag=%v", entry.Score, entry.Depth, entry.Flag)
 	}
@@ -143,13 +144,13 @@ func TestStoreCollision(t *testing.T) {
 	tt.Store(keyA, move, 50, 10, Exact) // deep depth
 	tt.Store(keyB, move, 1, 1, Upper)   // shallow, but different key - overwrite
 
-	entry, hit := tt.Probe(keyB)
-	if !hit || entry.Key != keyB || entry.Score != 1 || entry.Depth != 1 {
-		t.Errorf("expected collision to overwrite regardless of depth, got hit=%v key=%d score=%d depth=%d",
-			hit, entry.Key, entry.Score, entry.Depth)
+	entry := tt.Probe(keyB)
+	if entry.Key != keyB || entry.Score != 1 || entry.Depth != 1 {
+		t.Errorf("expected collision to overwrite regardless of depth, got key=%d score=%d depth=%d",
+			entry.Key, entry.Score, entry.Depth)
 	}
-
-	if _, hitA := tt.Probe(keyA); hitA {
+	entry = tt.Probe(keyA)
+	if entry.Key == keyA {
 		t.Errorf("expected keyA to be replaced by colliding keyB")
 	}
 }
@@ -160,12 +161,14 @@ func TestClear(t *testing.T) {
 	key := uint64(123)
 
 	tt.Store(key, move, 77, 8, Exact)
-	if _, hit := tt.Probe(key); !hit {
+	entry := tt.Probe(key)
+	if entry.Key != key {
 		t.Fatalf("expected hit before clear")
 	}
 
 	tt.Clear()
-	if _, hit := tt.Probe(key); hit {
+	entry = tt.Probe(key)
+	if entry.Key == key {
 		t.Errorf("expected miss after Clear")
 	}
 }

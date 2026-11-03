@@ -46,26 +46,33 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 		return alpha
 	}
 
+	singular := ss.stack[ply].singular
+	singularSearch := singular != board.NullMove
+
 	// TT lookup
-	entry, ttHit := ss.tt.Probe(pos.Hash)
-	if ttHit && !isPV && entry.Depth >= uint8(depth) {
-		score := scoreFromTT(entry.Score, ply)
-		switch entry.Flag {
-		case tt.Exact:
-			return score
-		case tt.Lower:
-			if score >= beta {
-				return score
-			}
-		case tt.Upper:
-			if score <= alpha {
-				return score
+	ttHit := false
+	ttMove := board.NullMove
+	if !singularSearch {
+		entry := ss.tt.Probe(pos.Hash)
+		ttHit = pos.Hash == entry.Key
+		if ttHit {
+			ttMove = entry.Move
+			if !isPV && entry.Depth >= uint8(depth) {
+				score := scoreFromTT(entry.Score, ply)
+				switch entry.Flag {
+				case tt.Exact:
+					return score
+				case tt.Lower:
+					if score >= beta {
+						return score
+					}
+				case tt.Upper:
+					if score <= alpha {
+						return score
+					}
+				}
 			}
 		}
-	}
-	ttMove := board.NullMove
-	if ttHit {
-		ttMove = entry.Move
 	}
 
 	stm := pos.SideToMove

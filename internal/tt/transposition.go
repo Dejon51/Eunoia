@@ -105,12 +105,12 @@ func (tt *Table) Store(key uint64, move board.Move, score int16, depth uint8, fl
 	}
 }
 
-func (tt *Table) Probe(key uint64) (Entry, bool) {
+func (tt *Table) Probe(key uint64) Entry {
 	if tt == nil || tt.usedEntries == 0 || tt.totalEntries == 0 {
-		return Entry{}, false
+		return Entry{}
 	}
 	entry := tt.entries[tt.index(key)]
-	return entry, entry.Key == key
+	return entry
 }
 
 func (tt *Table) index(key uint64) uint64 {
