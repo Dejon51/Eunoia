@@ -234,6 +234,9 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 			if score < sBeta {
 				extension = 1
 			}
+			 else if score >= beta && beta == alpha+1 {
+			    return beta
+			}
 		}
 
 		newPos := pos
