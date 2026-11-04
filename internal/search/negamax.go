@@ -46,26 +46,38 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 		return alpha
 	}
 
+	singular := ss.stack[ply].singular
+	singularSearch := singular != board.NullMove
+
 	// TT lookup
-	entry, ttHit := ss.tt.Probe(pos.Hash)
-	if ttHit && !isPV && entry.Depth >= uint8(depth) {
-		score := scoreFromTT(entry.Score, ply)
-		switch entry.Flag {
-		case tt.Exact:
-			return score
-		case tt.Lower:
-			if score >= beta {
-				return score
-			}
-		case tt.Upper:
-			if score <= alpha {
-				return score
+	ttHit := false
+	ttMove := board.NullMove
+	ttFlag := tt.Lower
+	ttDepth := 0
+	ttScore := -INF
+	if !singularSearch {
+		entry := ss.tt.Probe(pos.Hash)
+		ttHit = pos.Hash == entry.Key
+		if ttHit {
+			ttMove = entry.Move
+			ttFlag = entry.Flag
+			ttScore = scoreFromTT(entry.Score, ply)
+			ttDepth = int(entry.Depth)
+			if !isPV && entry.Depth >= uint8(depth) {
+				switch ttFlag {
+				case tt.Exact:
+					return ttScore
+				case tt.Lower:
+					if ttScore >= beta {
+						return ttScore
+					}
+				case tt.Upper:
+					if ttScore <= alpha {
+						return ttScore
+					}
+				}
 			}
 		}
-	}
-	ttMove := board.NullMove
-	if ttHit {
-		ttMove = entry.Move
 	}
 
 	stm := pos.SideToMove
@@ -94,51 +106,54 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 		improvingInt = 1
 	}
 
-	// reverse futility pruning
-	rfpMargin := rfpMargin(depth, improving)
-	if !isPV && !ttHit && !inCheck && staticEval >= beta+rfpMargin {
-		return staticEval
-	}
-
-	// null move pruning
-	if !inCheck && !isPV && pos.HasNonPawns() && staticEval >= beta && depth >= nmpMinDepth {
-		reduction := 3 + depth/5
-		reducedDepth := depth - reduction
-
-		newPos := pos
-		newPos.MakeNullMove()
-		ss.tt.Prefetch(newPos.Hash)
-		ss.Nodes++
-
-		ss.Keys.Push(newPos.Hash)
-		score := -ss.negamax(newPos, reducedDepth, ply+1, -beta, -beta+1)
-		ss.Keys.Pop()
-
-		if ss.ShouldStop(Hard) {
-			return 0
+	// pre-moveloop pruning
+	if !isPV && !inCheck && !singularSearch {
+		// reverse futility pruning
+		rfpMargin := rfpMargin(depth, improving)
+		if !ttHit && staticEval >= beta+rfpMargin {
+			return staticEval
 		}
 
-		if score >= beta {
-			// at low depths we can return NMP result directly
-			if depth <= 14 || ss.nmpMinPly > 0 {
-				if isMateScore(score) {
-					return beta
-				} else {
-					return score
-				}
-			}
+		// null move pruning
+		if pos.HasNonPawns() && staticEval >= beta && depth >= nmpMinDepth {
+			reduction := 3 + depth/5
+			reducedDepth := depth - reduction
 
-			// verification search
-			ss.nmpMinPly = ply + 3*uint16(reducedDepth)/4
-			verifScore := ss.negamax(pos, reducedDepth, ply, beta-1, beta)
-			ss.nmpMinPly = 0
+			newPos := pos
+			newPos.MakeNullMove()
+			ss.tt.Prefetch(newPos.Hash)
+			ss.Nodes++
+
+			ss.Keys.Push(newPos.Hash)
+			score := -ss.negamax(newPos, reducedDepth, ply+1, -beta, -beta+1)
+			ss.Keys.Pop()
 
 			if ss.ShouldStop(Hard) {
 				return 0
 			}
 
-			if verifScore >= beta {
-				return score
+			if score >= beta {
+				// at low depths we can return NMP result directly
+				if depth <= 14 || ss.nmpMinPly > 0 {
+					if isMateScore(score) {
+						return beta
+					} else {
+						return score
+					}
+				}
+
+				// verification search
+				ss.nmpMinPly = ply + 3*uint16(reducedDepth)/4
+				verifScore := ss.negamax(pos, reducedDepth, ply, beta-1, beta)
+				ss.nmpMinPly = 0
+
+				if ss.ShouldStop(Hard) {
+					return 0
+				}
+
+				if verifScore >= beta {
+					return score
+				}
 			}
 		}
 	}
@@ -158,9 +173,14 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 	nextMove := func() board.Move { return movePicker.Next(&pos, ss) }
 	for move := nextMove(); move != board.NullMove; move = nextMove() {
 		legalMoves++
+		if singularSearch && move == singular {
+			continue
+		}
 
 		isQuiet := !move.IsNoisy()
 		isMated := isMated(bestScore)
+		extension := 0
+
 		var historyScore int32
 		if isQuiet {
 			historyScore = ss.butterflyHistory[stm][move.From()][move.To()]
@@ -199,10 +219,27 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 			continue
 		}
 
+		// singular extensions
+		if !isRoot && !singularSearch &&
+			ttHit && move == ttMove && ttFlag != tt.Upper &&
+			depth >= 8 && ttDepth >= depth-3 {
+
+			sBeta := max(ttScore-2*int32(depth), -MATE+1)
+			sDepth := (depth - 1) / 2
+
+			ss.stack[ply].singular = move
+			score := ss.negamax(pos, sDepth, ply, sBeta-1, sBeta)
+			ss.stack[ply].singular = board.NullMove
+
+			if score < sBeta {
+				extension = 1
+			}
+		}
+
 		newPos := pos
 		ss.makeMove(&newPos, move)
 
-		newDepth := depth - 1
+		newDepth := depth + extension - 1
 
 		// late move reductions
 		isReduced := false
@@ -295,13 +332,15 @@ func (ss *SearchState) negamax(pos board.Position, depth int, ply uint16, alpha,
 	}
 
 	// update corrhist
-	if !inCheck && !bestMove.IsNoisy() && !isMateScore(bestScore) &&
+	if !inCheck && !singularSearch && !bestMove.IsNoisy() && !isMateScore(bestScore) &&
 		!(flag == tt.Upper && bestScore >= staticEval) &&
 		!(flag == tt.Lower && bestScore <= staticEval) {
 		ss.corrHist.Update(&pos, depth, staticEval, bestScore)
 	}
 
-	ss.tt.Store(pos.Hash, bestMove, scoreToTT(bestScore, ply), uint8(depth), flag)
+	if !singularSearch {
+		ss.tt.Store(pos.Hash, bestMove, scoreToTT(bestScore, ply), uint8(depth), flag)
+	}
 
 	return bestScore
 }
